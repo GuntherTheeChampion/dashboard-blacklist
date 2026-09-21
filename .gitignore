@@ -1,0 +1,8 @@
+# Streamlit secrets — contains private keys, never commit
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env

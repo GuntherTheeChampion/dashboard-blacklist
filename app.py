@@ -14,6 +14,8 @@ Data source:
 
 import pandas as pd
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ─────────────────────────────────────────────
 # CONSTANTS
@@ -37,6 +39,14 @@ CREDENTIALS = {
 
 SEARCH_COLS = ["Cust Name", "msisdn", "City", "account_number"]
 MANAGER_CAP = 5000
+
+# Google Sheets spreadsheet ID (extracted from SHEET_CSV_URL)
+SPREADSHEET_ID = "1R23JcPXdpPO8k_3ERpDoyzT4smFgmvJU"
+
+GSPREAD_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 
 # ─────────────────────────────────────────────
@@ -85,6 +95,107 @@ def load_data() -> pd.DataFrame:
 # the user is reading the login form. By the time they click Login the
 # DataFrame is already in memory and load_data() returns instantly.
 load_data()
+
+
+# ─────────────────────────────────────────────
+# GOOGLE SHEETS WRITE-BACK  (Manager only)
+# ─────────────────────────────────────────────
+
+@st.cache_resource
+def get_gspread_client() -> gspread.Client:
+    """
+    Authenticate with the Google Sheets API using the service account
+    credentials stored in st.secrets. Cached as a resource so the
+    OAuth handshake only happens once per server session.
+    """
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=GSPREAD_SCOPES,
+    )
+    return gspread.authorize(creds)
+
+
+def save_changes_to_sheet(edited_df: pd.DataFrame) -> None:
+    """
+    Write the edited DataFrame rows back to the Google Sheet.
+
+    Strategy:
+    - Open the sheet by spreadsheet ID.
+    - For each edited row, find the matching row in the sheet by
+      account_number (column A) and overwrite it in place.
+    - Uses batch_update for efficiency — one API call per save.
+
+    Only the Manager dashboard calls this function.
+    """
+    client = get_gspread_client()
+    sh = client.open_by_key(SPREADSHEET_ID)
+    worksheet = sh.get_worksheet(0)  # first sheet tab
+
+    # Fetch all current values to build a row-index lookup
+    all_values = worksheet.get_all_values()
+    if not all_values:
+        st.error("Spreadsheet kosong atau tidak dapat dibaca.")
+        return
+
+    headers = all_values[0]  # row 1 = headers
+
+    # Build a dict: account_number value → 1-based sheet row number
+    try:
+        acct_col_idx = headers.index("account_number")
+    except ValueError:
+        st.error("Kolom 'account_number' tidak ditemukan di spreadsheet.")
+        return
+
+    acct_to_row = {
+        row[acct_col_idx]: i + 2  # +2: skip header, convert to 1-based
+        for i, row in enumerate(all_values[1:])
+        if row[acct_col_idx]
+    }
+
+    updates = []
+    not_found = []
+
+    for _, row in edited_df.iterrows():
+        acct = str(row.get("account_number", "")).strip()
+        sheet_row = acct_to_row.get(acct)
+        if sheet_row is None:
+            not_found.append(acct)
+            continue
+
+        # Build the full row in header order, filling blanks for missing cols
+        new_row = []
+        for h in headers:
+            # Map sheet header to DataFrame column (handle total_bucket alias)
+            if h.lower().startswith("total_bucket"):
+                val = str(row.get("total_bucket", ""))
+            else:
+                val = str(row.get(h, ""))
+            new_row.append(val)
+
+        # A1 notation: row N, all columns from A to last header
+        end_col_letter = chr(ord("A") + len(headers) - 1)
+        cell_range = f"A{sheet_row}:{end_col_letter}{sheet_row}"
+        updates.append({"range": cell_range, "values": [new_row]})
+
+    if not updates:
+        st.warning("Tidak ada baris yang cocok ditemukan di spreadsheet.")
+        return
+
+    worksheet.batch_update(updates)
+
+    if not_found:
+        st.warning(
+            f"Perubahan disimpan, tetapi {len(not_found)} baris tidak ditemukan "
+            f"di spreadsheet (account_number tidak cocok): {', '.join(not_found[:5])}"
+        )
+    else:
+        st.success(
+            f"✅ {len(updates)} baris berhasil disimpan ke Google Sheets."
+        )
+
+    # Refresh the local cache so the dashboard reflects the saved data
+    load_data.clear()
+    load_data()
 
 
 # ─────────────────────────────────────────────
@@ -517,7 +628,7 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
 
     st.divider()
     st.subheader("Data Pelanggan Bad Debt")
-    st.data_editor(
+    edited = st.data_editor(
         display_df,
         key="manager_editor",
         num_rows="dynamic",
@@ -535,12 +646,12 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
         },
     )
 
-    if st.button("Simpan Perubahan", type="primary"):
-        st.success(
-            "Perubahan telah dicatat. "
-            "Write-back ke Google Sheets akan diaktifkan di Phase 2 "
-            "menggunakan Google Sheets API & Service Account."
-        )
+    if st.button("💾 Simpan Perubahan", type="primary"):
+        with st.spinner("Menyimpan ke Google Sheets..."):
+            try:
+                save_changes_to_sheet(edited)
+            except Exception as e:
+                st.error(f"Gagal menyimpan: {e}")
 
     # Duplicate detection panel
     duplicates = display_df[display_df.duplicated("msisdn", keep=False)].copy()
