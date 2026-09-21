@@ -516,7 +516,7 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
     )
 
     st.divider()
-    st.subheader("Data Nasabah")
+    st.subheader("Data Pelanggan Bad Debt")
     st.data_editor(
         display_df,
         key="manager_editor",
