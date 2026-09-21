@@ -444,7 +444,7 @@ def render_visitor_card(row: pd.Series) -> None:
 
 
 def show_visitor_dashboard(df: pd.DataFrame) -> None:
-    st.title("Pencarian Nasabah")
+    st.title("Pencarian Data Pelanggan Bad Debt")
     st.caption("Masukkan nama, nomor MSISDN, atau kota untuk mencari data nasabah.")
 
     query = st.text_input(
