@@ -334,6 +334,8 @@ def show_navbar() -> None:
             st.session_state.logged_in = False
             st.session_state.role = None
             st.session_state.username = None
+            # Clear query params so login page is shown on next visit
+            st.query_params.clear()
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -365,6 +367,9 @@ def show_login() -> None:
                 st.session_state.logged_in = True
                 st.session_state.role = role
                 st.session_state.username = username.strip()
+                # Persist login across browser refresh via URL query params
+                st.query_params["role"] = role
+                st.query_params["user"] = username.strip()
                 st.rerun()
             else:
                 st.error("Incorrect username or password. Please try again.")
@@ -676,9 +681,19 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
 def main() -> None:
     inject_global_css()
 
+    # Restore session from URL query params on browser refresh
     if not st.session_state.get("logged_in", False):
-        show_login()
-        return
+        params = st.query_params
+        qrole = params.get("role", "")
+        quser = params.get("user", "")
+        # Only restore if the role is a valid known role
+        if qrole in ("manager", "visitor") and quser:
+            st.session_state.logged_in = True
+            st.session_state.role = qrole
+            st.session_state.username = quser
+        else:
+            show_login()
+            return
 
     # Navbar replaces the sidebar — always rendered when logged in
     show_navbar()
