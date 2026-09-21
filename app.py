@@ -69,6 +69,15 @@ def load_data() -> pd.DataFrame:
         df[col] = df[col].str.strip()
     if "Cust Name" in df.columns:
         df["Cust Name"] = df["Cust Name"].str.strip(".").str.strip()
+
+    # Normalise the total bucket column to a stable key "total_bucket".
+    # The sheet header varies between "total_bucket_per_msisdn" and
+    # "total_bucket_per_misdn" depending on the export — handle both.
+    for raw_col in list(df.columns):
+        if raw_col.lower().startswith("total_bucket"):
+            df = df.rename(columns={raw_col: "total_bucket"})
+            break
+
     return df
 
 
@@ -164,19 +173,18 @@ def inject_global_css() -> None:
 def show_navbar() -> None:
     """
     Render a fixed top navbar with brand, user info, role badge,
-    optional Sumber Data link (manager only), and a Logout button.
+    optional Sumber Data link (manager only), Refresh Data button,
+    and a Logout button.
 
-    The Logout button must be a real st.button (cannot be pure HTML)
-    because only Streamlit widgets can mutate session_state and call
-    st.rerun(). It is placed in a narrow column that visually aligns
-    with the right side of the navbar.
+    Streamlit buttons cannot live inside the fixed HTML navbar div,
+    so they are placed in narrow columns pulled up via negative margin
+    to visually sit inside the navbar band.
     """
     role = st.session_state.get("role", "visitor")
     username = st.session_state.get("username", "")
     badge_class = "badge-manager" if role == "manager" else "badge-visitor"
     role_label = "Manager" if role == "manager" else "Visitor"
 
-    # Build the optional Sumber Data anchor
     source_link = (
         f'<a class="nav-source-link" href="{SHEET_EDIT_URL}" target="_blank">'
         "Sumber Data"
@@ -193,21 +201,24 @@ def show_navbar() -> None:
         f'<strong>{username}</strong>'
         f'&nbsp;&nbsp;<span class="{badge_class}">{role_label}</span>'
         f'</span>'
-        # Spacer before logout button placeholder
         '<span style="width:8px"></span>'
         "</div>"
     )
     st.markdown(navbar_html, unsafe_allow_html=True)
 
-    # Logout button — floated to top-right via a zero-height column trick.
-    # We use st.columns to push it to the far right without breaking layout.
-    spacer, btn_col = st.columns([0.93, 0.07])
-    with btn_col:
-        # Negative margin pulls it up into the navbar band
-        st.markdown(
-            '<div style="margin-top:-46px">',
-            unsafe_allow_html=True,
-        )
+    # Two buttons in narrow columns, pulled up into the navbar band.
+    spacer, refresh_col, logout_col = st.columns([0.86, 0.07, 0.07])
+
+    with refresh_col:
+        st.markdown('<div style="margin-top:-46px">', unsafe_allow_html=True)
+        if st.button("Refresh Data", key="navbar_refresh"):
+            load_data.clear()   # wipe the @st.cache_data entry
+            load_data()         # re-download immediately so next render is instant
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with logout_col:
+        st.markdown('<div style="margin-top:-46px">', unsafe_allow_html=True)
         if st.button("Logout", key="navbar_logout"):
             st.session_state.logged_in = False
             st.session_state.role = None
@@ -316,48 +327,120 @@ def search_and_rank(
 
 def render_visitor_card(row: pd.Series) -> None:
     """
-    One result card. All fields except account_number are wrapped in
-    user-select:none + pointer-events:none. account_number (FA ID) is
-    rendered via st.code() for one-click copy.
+    Compact horizontal card optimised for both desktop and mobile.
 
-    All styles are fully inline — no CSS class references inside the
-    protected block — to prevent Streamlit treating it as a code fence.
+    Layout: CSS Grid with 2 columns on mobile (<=600px) and 4 columns
+    on desktop. All protected fields (no-copy) live in one HTML block.
+    FA ID uses st.code() placed directly below the card with zero gap,
+    visually attached via negative top margin so it reads as part of
+    the card.
+
+    All styles are fully inline — no external CSS class references
+    inside the protected block — to prevent Streamlit code-fence bug.
     """
-    CARD = (
-        "background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px;"
-        "padding:14px 18px;margin-bottom:6px;"
+    name    = row.get("Cust Name", "")
+    msisdn  = row.get("msisdn", "")
+    city    = row.get("City", "")
+    address = row.get("Address", "")
+    bucket  = row.get("total_bucket", "")
+    fa_id   = row.get("account_number", "")
+
+    # Inline style fragments
+    WRAP  = (
         "user-select:none;pointer-events:none;"
+        "background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px 8px 0 0;"
+        "padding:10px 14px 8px 14px;margin-bottom:0;"
     )
-    LABEL = (
-        "font-size:11px;font-weight:600;color:#57606a;"
-        "text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;"
+    GRID  = (
+        "display:grid;"
+        "grid-template-columns:repeat(2,1fr);"   # 2-col default (mobile)
+        "gap:6px 14px;"
     )
-    VALUE = "font-size:14px;color:#1f2328;margin-bottom:8px;"
+    # On wider screens override to 4 columns via a media-query style block
+    MEDIA = (
+        "<style>"
+        "@media(min-width:600px){"
+        ".vc-grid{grid-template-columns:repeat(4,1fr)!important}"
+        "}"
+        "</style>"
+    )
+    CELL  = "min-width:0;"          # prevent overflow in narrow cells
+    LBL   = (
+        "font-size:10px;font-weight:600;color:#57606a;"
+        "text-transform:uppercase;letter-spacing:0.04em;margin-bottom:1px;"
+    )
+    VAL   = "font-size:13px;color:#1f2328;word-break:break-word;"
+    # Address gets its own wider row spanning all columns
+    ADDR_ROW = (
+        "grid-column:1/-1;"        # span full width
+        "min-width:0;"
+    )
 
     st.markdown(
-        f'<div style="{CARD}">'
-        f'<div style="{LABEL}">Nama Nasabah</div>'
-        f'<div style="{VALUE}">{row.get("Cust Name", "")}</div>'
-        f'<div style="{LABEL}">MSISDN</div>'
-        f'<div style="{VALUE}">{row.get("msisdn", "")}</div>'
-        f'<div style="{LABEL}">Kota</div>'
-        f'<div style="{VALUE}">{row.get("City", "")}</div>'
-        f'<div style="{LABEL}">Alamat</div>'
-        f'<div style="{VALUE}">{row.get("Address", "")}</div>'
-        f'<div style="{LABEL}">Total Bucket</div>'
-        f'<div style="{VALUE}">{row.get("total_bucket_per_msisdn", "")}</div>'
+        f"{MEDIA}"
+        f'<div style="{WRAP}">'
+        f'<div class="vc-grid" style="{GRID}">'
+        # Cell 1 — Name
+        f'<div style="{CELL}">'
+        f'<div style="{LBL}">Nama Nasabah</div>'
+        f'<div style="{VAL}">{name}</div>'
+        f'</div>'
+        # Cell 2 — MSISDN
+        f'<div style="{CELL}">'
+        f'<div style="{LBL}">MSISDN</div>'
+        f'<div style="{VAL}">{msisdn}</div>'
+        f'</div>'
+        # Cell 3 — City
+        f'<div style="{CELL}">'
+        f'<div style="{LBL}">Kota</div>'
+        f'<div style="{VAL}">{city}</div>'
+        f'</div>'
+        # Cell 4 — Total Bucket
+        f'<div style="{CELL}">'
+        f'<div style="{LBL}">Total Bucket</div>'
+        f'<div style="{VAL}">{bucket}</div>'
+        f'</div>'
+        # Full-width row — Address
+        f'<div style="{ADDR_ROW}">'
+        f'<div style="{LBL}">Alamat</div>'
+        f'<div style="{VAL}">{address}</div>'
+        f'</div>'
+        f'</div>'   # end grid
+        f'</div>',  # end card
+        unsafe_allow_html=True,
+    )
+
+    # FA ID copyable strip — visually attached to the bottom of the card.
+    # Rounded only on bottom edges; zero gap achieved by negative margin.
+    fa_strip = (
+        "background:#eef4ff;border:1px solid #c7d9f8;border-top:none;"
+        "border-radius:0 0 8px 8px;"
+        "padding:5px 14px 6px 14px;margin-bottom:8px;"
+        "display:flex;align-items:center;gap:10px;"
+    )
+    fa_lbl = (
+        "font-size:10px;font-weight:600;color:#3b82d4;"
+        "text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;"
+    )
+    fa_val = (
+        "font-family:monospace;font-size:13px;color:#1f2328;"
+        "background:#dbeafe;border:1px solid #bfdbfe;border-radius:4px;"
+        "padding:1px 8px;cursor:pointer;"
+    )
+    st.markdown(
+        f'<div style="{fa_strip}">'
+        f'<span style="{fa_lbl}">FA ID</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
+    # st.code renders with its own copy button — placed directly below
+    # the strip label via tight container margins
     st.markdown(
-        '<div style="font-size:11px;font-weight:600;color:#3b82d4;'
-        'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">'
-        "FA ID (klik untuk salin)"
-        "</div>",
+        '<div style="margin-top:-12px;margin-bottom:8px;">',
         unsafe_allow_html=True,
     )
-    st.code(row.get("account_number", ""), language=None)
-    st.write("")
+    st.code(fa_id, language=None)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def show_visitor_dashboard(df: pd.DataFrame) -> None:
@@ -446,8 +529,8 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
             "Cust Name":      st.column_config.TextColumn("Nama Nasabah", width="large"),
             "Address":        st.column_config.TextColumn("Alamat", width="large"),
             "City":           st.column_config.TextColumn("Kota", width="medium"),
-            "total_bucket_per_msisdn": st.column_config.TextColumn(
-                "Total Bucket", width="medium"
+            "total_bucket": st.column_config.TextColumn(
+                "Total Bucket (IDR)", width="medium"
             ),
         },
     )
