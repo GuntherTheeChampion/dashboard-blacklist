@@ -633,11 +633,10 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
 
     st.divider()
     st.subheader("Data Pelanggan Bad Debt")
-    edited = st.data_editor(
+    st.dataframe(
         display_df,
-        key="manager_editor",
-        num_rows="dynamic",
         use_container_width=True,
+        hide_index=True,
         column_config={
             "account_number": st.column_config.TextColumn("Account Number", width="medium"),
             "msisdn":         st.column_config.TextColumn("MSISDN", width="medium"),
@@ -645,18 +644,9 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
             "Cust Name":      st.column_config.TextColumn("Nama Nasabah", width="large"),
             "Address":        st.column_config.TextColumn("Alamat", width="large"),
             "City":           st.column_config.TextColumn("Kota", width="medium"),
-            "total_bucket": st.column_config.TextColumn(
-                "Total Bucket (IDR)", width="medium"
-            ),
+            "total_bucket":   st.column_config.TextColumn("Total Bucket (IDR)", width="medium"),
         },
     )
-
-    if st.button("💾 Simpan Perubahan", type="primary"):
-        with st.spinner("Menyimpan ke Google Sheets..."):
-            try:
-                save_changes_to_sheet(edited)
-            except Exception as e:
-                st.error(f"Gagal menyimpan: {e}")
 
     # Duplicate detection panel
     duplicates = display_df[display_df.duplicated("msisdn", keep=False)].copy()
@@ -667,11 +657,32 @@ def show_manager_dashboard(df: pd.DataFrame) -> None:
             "Periksa entri duplikat di bawah ini."
         )
         with st.expander("Lihat Entri Duplikat", expanded=True):
-            st.dataframe(
+            edited_dups = st.data_editor(
                 duplicates.sort_values("msisdn"),
+                key="dup_editor",
+                num_rows="dynamic",
                 use_container_width=True,
                 hide_index=True,
+                column_config={
+                    "account_number": st.column_config.TextColumn("Account Number", width="medium"),
+                    "msisdn":         st.column_config.TextColumn("MSISDN", width="medium"),
+                    "Val":            st.column_config.TextColumn("Val", width="small"),
+                    "Cust Name":      st.column_config.TextColumn("Nama Nasabah", width="large"),
+                    "Address":        st.column_config.TextColumn("Alamat", width="large"),
+                    "City":           st.column_config.TextColumn("Kota", width="medium"),
+                    "total_bucket":   st.column_config.TextColumn("Total Bucket (IDR)", width="medium"),
+                },
             )
+        st.info(
+            "💡 Catatan: Menghapus baris di tabel ini hanya menghapus tampilan lokal. "
+            "Untuk menghapus data permanen dari spreadsheet, hubungi administrator."
+        )
+        if st.button("💾 Simpan Perubahan Duplikat", type="primary", key="dup_save"):
+            with st.spinner("Menyimpan ke Google Sheets..."):
+                try:
+                    save_changes_to_sheet(edited_dups)
+                except Exception as e:
+                    st.error(f"Gagal menyimpan: {e}")
 
 
 # ─────────────────────────────────────────────
